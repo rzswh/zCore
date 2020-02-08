@@ -50,7 +50,7 @@ pub fn run(
 extern "C" fn handle_syscall(
     thread: &'static Arc<Thread>,
     regs: &'static mut GeneralRegs,
-) -> Pin<Box<dyn Future<Output = bool> + Send + Sync>> {
+) -> Pin<Box<dyn Future<Output = bool> + Send>> {
     Box::pin(handle_syscall_async(thread, regs))
 }
 

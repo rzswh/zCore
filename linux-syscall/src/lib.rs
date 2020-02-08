@@ -3,6 +3,7 @@
 #![no_std]
 #![deny(warnings, unsafe_code, unused_must_use, unreachable_patterns)]
 #![feature(bool_to_option)]
+#![feature(untagged_unions)]
 
 #[macro_use]
 extern crate alloc;
@@ -22,6 +23,7 @@ use {
 mod consts;
 mod file;
 mod misc;
+mod net;
 mod task;
 mod time;
 mod util;
@@ -114,21 +116,24 @@ impl Syscall<'_> {
             //            SYS_SCHED_GETAFFINITY => self.sys_sched_getaffinity(a0, a1, a2.into()),
 
             // socket
-            //            SYS_SOCKET => self.sys_socket(a0, a1, a2),
-            //            SYS_CONNECT => self.sys_connect(a0, a1.into(), a2),
-            //            SYS_ACCEPT => self.sys_accept(a0, a1.into(), a2.into()),
-            //            SYS_ACCEPT4 => self.sys_accept(a0, a1.into(), a2.into()), // use accept for accept4
-            //            SYS_SENDTO => self.sys_sendto(a0, a1.into(), a2, a3, a4.into(), a5),
-            //            SYS_RECVFROM => self.sys_recvfrom(a0, a1.into(), a2, a3, a4.into(), a5.into()),
+            SYS_SOCKET => self.sys_socket(a0, a1, a2),
+            SYS_CONNECT => self.sys_connect(a0.into(), a1.into(), a2).await,
+            SYS_ACCEPT => self.sys_accept(a0.into(), a1.into(), a2.into()).await,
+            SYS_ACCEPT4 => self.sys_accept(a0.into(), a1.into(), a2.into()).await, // use accept for accept4
+            SYS_SENDTO => self.sys_sendto(a0.into(), a1.into(), a2, a3, a4.into(), a5),
+            SYS_RECVFROM => {
+                self.sys_recvfrom(a0.into(), a1.into(), a2, a3, a4.into(), a5.into())
+                    .await
+            }
             //            SYS_SENDMSG => self.sys_sendmsg(),
             //            SYS_RECVMSG => self.sys_recvmsg(a0, a1.into(), a2),
-            //            SYS_SHUTDOWN => self.sys_shutdown(a0, a1),
-            //            SYS_BIND => self.sys_bind(a0, a1.into(), a2),
-            //            SYS_LISTEN => self.sys_listen(a0, a1),
-            //            SYS_GETSOCKNAME => self.sys_getsockname(a0, a1.into(), a2.into()),
-            //            SYS_GETPEERNAME => self.sys_getpeername(a0, a1.into(), a2.into()),
-            //            SYS_SETSOCKOPT => self.sys_setsockopt(a0, a1, a2, a3.into(), a4),
-            //            SYS_GETSOCKOPT => self.sys_getsockopt(a0, a1, a2, a3.into(), a4.into()),
+            SYS_SHUTDOWN => self.sys_shutdown(a0.into(), a1),
+            SYS_BIND => self.sys_bind(a0.into(), a1.into(), a2),
+            SYS_LISTEN => self.sys_listen(a0.into(), a1),
+            SYS_GETSOCKNAME => self.sys_getsockname(a0.into(), a1.into(), a2.into()),
+            SYS_GETPEERNAME => self.sys_getpeername(a0.into(), a1.into(), a2.into()),
+            SYS_SETSOCKOPT => self.sys_setsockopt(a0.into(), a1, a2, a3.into(), a4),
+            SYS_GETSOCKOPT => self.sys_getsockopt(a0.into(), a1, a2, a3.into(), a4.into()),
 
             // process
             SYS_CLONE => self.sys_clone(a0, a1, a2.into(), a3.into(), a4),
