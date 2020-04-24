@@ -3,8 +3,9 @@ use {
     crate::util::block_range::BlockIter,
     alloc::sync::Arc,
     alloc::vec::Vec,
+    core::arch::x86_64::{__cpuid, _mm_clflush, _mm_mfence},
     core::ops::Range,
-    kernel_hal::{PageTable, PhysFrame},
+    kernel_hal::{PageTable, PhysFrame, PAGE_SIZE, PHYSMAP_BASE, PHYSMAP_BASE_PHYS},
     spin::Mutex,
 };
 
@@ -18,6 +19,7 @@ struct VMObjectPagedInner {
     parent: Option<Arc<VMObjectPaged>>,
     parent_offset: usize,
     frames: Vec<Option<PhysFrame>>,
+    cache_policy: u32,
 }
 
 impl VMObjectPaged {
@@ -31,6 +33,7 @@ impl VMObjectPaged {
                 parent: None,
                 parent_offset: 0usize,
                 frames,
+                cache_policy: CachePolicy::Cached as u32,
             }),
         })
     }
@@ -171,6 +174,7 @@ impl VMObjectTrait for VMObjectPaged {
                 parent: old_parent,
                 parent_offset: 0usize,
                 frames,
+                cache_policy: CachePolicy::Cached as u32, // ?
             }),
         });
 
@@ -186,6 +190,7 @@ impl VMObjectTrait for VMObjectPaged {
                 parent: Some(hidden_vmo),
                 parent_offset: offset,
                 frames: child_frames,
+                cache_policy: inner.cache_policy,
             }),
         })
     }
@@ -200,6 +205,10 @@ impl VMObjectTrait for VMObjectPaged {
             Some(PhysFrame::alloc().expect("faild to alloc frame"))
         });
         let inner = self.inner.lock();
+        // TODO: when contiguous implemented
+        // if inner.cache_policy != CACHE_POLICY_CACHED && !self.is_contiguous() {
+        //     return ZxResult(ZxError::BAD_STATE);
+        // }
         // copy physical memory
         for (i, new_frame) in frames.iter().enumerate() {
             if let Some(frame) = &inner.frames[frames_offset + i] {
@@ -211,9 +220,53 @@ impl VMObjectTrait for VMObjectPaged {
                 parent: None,
                 parent_offset: offset,
                 frames,
+                cache_policy: CachePolicy::Cached as u32,
             }),
         })
     }
+
+    fn get_cache_policy(&self) -> u32 {
+        self.inner.lock().cache_policy
+    }
+
+    fn set_cache_policy(&self, policy: u32) -> ZxResult {
+        if (policy & !CACHE_POLICY_MASK) != 0 {
+            Err(ZxError::INVALID_ARGS)
+        } else {
+            // conditions for allowing the cache policy to be set:
+            // 1) vmo either has no pages committed currently or is transitioning from being cached
+            // 2) vmo has no pinned pages
+            // 3) vmo has no mappings
+            // 4) vmo has no children
+            // 5) vmo is not a child
+            let mut inner = self.inner.lock();
+            if inner.frames.is_empty() && inner.cache_policy == CachePolicy::Cached as u32 {
+                return Err(ZxError::BAD_STATE);
+            }
+            if let Some(_) = inner.parent {
+                return Err(ZxError::BAD_STATE);
+            }
+            if inner.cache_policy == CachePolicy::Cached as u32
+                && policy != CachePolicy::Cached as u32
+            {
+                for p in inner.frames.iter() {
+                    if let Some(p) = p {
+                        let addr = p.addr();
+                        let physmap_addr =
+                            addr - PHYSMAP_BASE_PHYS as usize + PHYSMAP_BASE as usize;
+                        clean_invalid_cache(physmap_addr, PAGE_SIZE);
+                    }
+                }
+            }
+            inner.cache_policy = policy;
+            Ok(())
+        }
+    }
+
+    // TODO: for vmo_create_contiguous
+    // fn is_contiguous(&self) -> bool {
+    //     false
+    // }
 }
 
 impl VMObjectPagedInner {
@@ -250,6 +303,30 @@ impl VMObjectPagedInner {
             self.commit(page_idx).addr()
         }
     }
+}
+
+// sse2
+#[cfg(target_arch = "x86_64")]
+#[allow(unsafe_code)]
+pub fn clean_invalid_cache(addr: usize, len: usize) {
+    let clsize = unsafe { get_cacheline_flush_size() };
+    let end = addr + len;
+    let mut start = addr & !(clsize - 1);
+    while start < end {
+        unsafe {
+            _mm_clflush(start as *const u8);
+        }
+        start = start + PAGE_SIZE;
+    }
+    unsafe {
+        _mm_mfence();
+    }
+}
+
+#[allow(unsafe_code)]
+unsafe fn get_cacheline_flush_size() -> usize {
+    let leaf = __cpuid(1).ebx;
+    (((leaf >> 8) & 0xff) << 3) as usize
 }
 
 #[cfg(test)]

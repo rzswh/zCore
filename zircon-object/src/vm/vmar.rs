@@ -45,6 +45,23 @@ struct VmarInner {
 }
 
 impl VmAddressRegion {
+    pub fn new(
+        parent: Option<Arc<VmAddressRegion>>,
+        base: VirtAddr,
+        size: usize,
+        flags: VmarFlags,
+    ) -> Arc<Self> {
+        Arc::new(VmAddressRegion {
+            flags,
+            base: KObjectBase::new(),
+            _counter: CountHelper::new(),
+            addr: base,
+            size,
+            parent,
+            inner: Mutex::new(Some(VmarInner::default())),
+            page_table: Arc::new(Mutex::new(kernel_hal::PageTable::new())),
+        })
+    }
     /// Create a new root VMAR.
     pub fn new_root() -> Arc<Self> {
         // FIXME: workaround for unix
@@ -127,6 +144,11 @@ impl VmAddressRegion {
         let inner = guard.as_mut().ok_or(ZxError::BAD_STATE)?;
         let offset = self.determine_offset(inner, vmar_offset, len, PAGE_SIZE)?;
         let addr = self.addr + offset;
+        let mut flags = flags;
+        // if vmo != 0
+        {
+            flags |= MMUFlags::from_bits_truncate(vmo.get_cache_policy() as usize);
+        }
         let mapping = VmMapping {
             addr,
             size: len,
