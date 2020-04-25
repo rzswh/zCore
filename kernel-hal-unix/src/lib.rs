@@ -145,7 +145,7 @@ impl Debug for PhysFrame {
 
 lazy_static! {
     static ref AVAILABLE_FRAMES: Mutex<VecDeque<usize>> =
-        Mutex::new((0..PMEM_SIZE).step_by(PAGE_SIZE).collect());
+        Mutex::new((PAGE_SIZE..PMEM_SIZE).step_by(PAGE_SIZE).collect());
 }
 
 impl PhysFrame {
@@ -158,6 +158,10 @@ impl PhysFrame {
             .map(|paddr| PhysFrame { paddr });
         trace!("frame alloc: {:?}", ret);
         ret
+    }
+    #[export_name = "hal_zero_frame_paddr"]
+    pub fn zero_frame_addr() -> PhysAddr {
+        0
     }
 }
 
@@ -176,11 +180,17 @@ fn phys_to_virt(paddr: PhysAddr) -> VirtAddr {
     PMEM_BASE + paddr
 }
 
+/// Ensure physical memory are mmapped and accessible.
+fn ensure_mmap_pmem() {
+    FRAME_FILE.as_raw_fd();
+}
+
 /// Read physical memory from `paddr` to `buf`.
 #[export_name = "hal_pmem_read"]
 pub fn pmem_read(paddr: PhysAddr, buf: &mut [u8]) {
     trace!("pmem read: paddr={:#x}, len={:#x}", paddr, buf.len());
     assert!(paddr + buf.len() <= PMEM_SIZE);
+    ensure_mmap_pmem();
     unsafe {
         (phys_to_virt(paddr) as *const u8).copy_to_nonoverlapping(buf.as_mut_ptr(), buf.len());
     }
@@ -191,6 +201,7 @@ pub fn pmem_read(paddr: PhysAddr, buf: &mut [u8]) {
 pub fn pmem_write(paddr: PhysAddr, buf: &[u8]) {
     trace!("pmem write: paddr={:#x}, len={:#x}", paddr, buf.len());
     assert!(paddr + buf.len() <= PMEM_SIZE);
+    ensure_mmap_pmem();
     unsafe {
         buf.as_ptr()
             .copy_to_nonoverlapping(phys_to_virt(paddr) as _, buf.len());
@@ -202,6 +213,7 @@ pub fn pmem_write(paddr: PhysAddr, buf: &[u8]) {
 pub fn frame_copy(src: PhysAddr, target: PhysAddr) {
     trace!("frame_copy: {:#x} <- {:#x}", target, src);
     assert!(src + PAGE_SIZE <= PMEM_SIZE && target + PAGE_SIZE <= PMEM_SIZE);
+    ensure_mmap_pmem();
     unsafe {
         let buf = phys_to_virt(src) as *const u8;
         buf.copy_to_nonoverlapping(phys_to_virt(target) as _, PAGE_SIZE);
@@ -213,6 +225,7 @@ pub fn frame_copy(src: PhysAddr, target: PhysAddr) {
 pub fn frame_zero(target: PhysAddr) {
     trace!("frame_zero: {:#x}", target);
     assert!(target + PAGE_SIZE < PMEM_SIZE);
+    ensure_mmap_pmem();
     unsafe {
         core::ptr::write_bytes(phys_to_virt(target) as *mut u8, 0, PAGE_SIZE);
     }
@@ -382,8 +395,6 @@ pub fn init() {
     unsafe {
         register_sigsegv_handler();
     }
-    // ensure physical memory are mmapped and accessible
-    FRAME_FILE.as_raw_fd();
     // spawn a thread to read stdin
     // TODO: raw mode
     std::thread::spawn(|| {

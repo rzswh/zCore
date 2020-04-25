@@ -123,6 +123,14 @@ impl Frame {
             hal_frame_dealloc(&self.paddr);
         }
     }
+
+    #[export_name = "hal_zero_frame_paddr"]
+    pub fn zero_frame_addr() -> PhysAddr {
+        #[repr(align(0x1000))]
+        struct Page([u8; PAGE_SIZE]);
+        static ZERO_PAGE: Page = Page([0u8; PAGE_SIZE]);
+        unsafe { ZERO_PAGE.0.as_ptr() as usize - PMEM_BASE }
+    }
 }
 
 fn phys_to_virt(paddr: PhysAddr) -> VirtAddr {

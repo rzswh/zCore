@@ -7,6 +7,13 @@ mod physical;
 use self::{paged::*, physical::*};
 use core::ops::Deref;
 
+kcounter!(VMO_PAGE_ALLOC, "vmo.page_alloc");
+kcounter!(VMO_PAGE_DEALLOC, "vmo.page_dealloc");
+
+pub fn vmo_page_bytes() -> usize {
+    (VMO_PAGE_ALLOC.get() - VMO_PAGE_DEALLOC.get()) * PAGE_SIZE
+}
+
 /// Virtual Memory Objects
 #[allow(clippy::len_without_is_empty)]
 pub trait VMObjectTrait: Sync + Send {
@@ -104,7 +111,6 @@ impl VmObject {
     }
 
     pub fn create_child(&self, resizable: bool, offset: usize, len: usize) -> Arc<Self> {
-        // error!("create_child: offset={:#x}, len={:#x}", offset, len);
         Arc::new(VmObject {
             base: KObjectBase::with(&self.base.name(), Signal::SIGNALED),
             parent_koid: self.base.id,
@@ -208,14 +214,20 @@ bitflags! {
     }
 }
 
+#[derive(PartialEq, Eq, Clone, Copy)]
+pub enum RangeChangeOp {
+    Unmap,
+    RemoveWrite,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     pub fn read_write(vmo: &VmObject) {
         let mut buf = [0u8; 4];
-        vmo.write(0, &[0, 1, 2, 3]);
-        vmo.read(0, &mut buf);
+        vmo.write(0, &[0, 1, 2, 3]).unwrap();
+        vmo.read(0, &mut buf).unwrap();
         assert_eq!(&buf, &[0, 1, 2, 3]);
     }
 }
