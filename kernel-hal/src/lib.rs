@@ -23,7 +23,7 @@ pub mod defs {
     }
     numeric_enum! {
         #[repr(u32)]
-        #[derive(Debug, Eq, PartialEq, PartialOrd)]
+        #[derive(Debug, PartialEq, Clone, Copy)]
         pub enum CachePolicy {
             Cached = 0,
             Uncached = 1,

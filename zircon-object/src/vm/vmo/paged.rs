@@ -7,7 +7,7 @@ use {
     alloc::vec::Vec,
     core::arch::x86_64::{__cpuid, _mm_clflush, _mm_mfence},
     core::ops::Range,
-    kernel_hal::{PageTable, PhysFrame, PAGE_SIZE, PHYSMAP_BASE, PHYSMAP_BASE_PHYS},
+    kernel_hal::{PhysFrame, PAGE_SIZE, PHYSMAP_BASE, PHYSMAP_BASE_PHYS},
     spin::Mutex,
 };
 
@@ -49,7 +49,7 @@ struct VMObjectPagedInner {
     /// All mappings to this VMO.
     mappings: Vec<Arc<VmMapping>>,
     /// Cache Policy
-    cache_policy: u32,
+    cache_policy: CachePolicy,
 }
 
 /// Page state in VMO.
@@ -78,7 +78,7 @@ impl VMObjectPaged {
             size: pages * PAGE_SIZE,
             frames: BTreeMap::new(),
             mappings: Vec::new(),
-            cache_policy: CachePolicy::Cached as u32,
+            cache_policy: CachePolicy::Cached,
         })
     }
 
@@ -203,47 +203,47 @@ impl VMObjectTrait for VMObjectPaged {
         self.inner.lock().mappings.push(mapping);
     }
 
+    fn remove_mapping(&self, mapping: Arc<VmMapping>) {
+        let mut inner = self.inner.lock();
+        inner.mappings.drain_filter(|x| Arc::ptr_eq(&x, &mapping));
+    }
+
     fn complete_info(&self, info: &mut ZxInfoVmo) {
         info.flags |= VmoInfoFlags::TYPE_PAGED;
         self.inner.lock().complete_info(info);
     }
 
-    fn get_cache_policy(&self) -> u32 {
-        self.inner.lock().cache_policy
+    fn get_cache_policy(&self) -> CachePolicy {
+        let inner = self.inner.lock();
+        inner.cache_policy
     }
 
-    fn set_cache_policy(&self, policy: u32) -> ZxResult {
-        if (policy & !CACHE_POLICY_MASK) != 0 {
-            Err(ZxError::INVALID_ARGS)
-        } else {
-            // conditions for allowing the cache policy to be set:
-            // 1) vmo either has no pages committed currently or is transitioning from being cached
-            // 2) vmo has no pinned pages
-            // 3) vmo has no mappings
-            // 4) vmo has no children
-            // 5) vmo is not a child
-            let mut inner = self.inner.lock();
-            if inner.frames.is_empty() && inner.cache_policy == CachePolicy::Cached as u32 {
-                return Err(ZxError::BAD_STATE);
-            }
-            if let Some(_) = inner.parent {
-                return Err(ZxError::BAD_STATE);
-            }
-            if inner.cache_policy == CachePolicy::Cached as u32
-                && policy != CachePolicy::Cached as u32
-            {
-                for p in inner.frames.iter() {
-                    if let Some(p) = p {
-                        let addr = p.addr();
-                        let physmap_addr =
-                            addr - PHYSMAP_BASE_PHYS as usize + PHYSMAP_BASE as usize;
-                        clean_invalid_cache(physmap_addr, PAGE_SIZE);
-                    }
-                }
-            }
-            inner.cache_policy = policy;
-            Ok(())
+    fn set_cache_policy(&self, policy: CachePolicy) -> ZxResult {
+        // conditions for allowing the cache policy to be set:
+        // 1) vmo either has no pages committed currently or is transitioning from being cached
+        // 2) vmo has no pinned pages
+        // 3) vmo has no mappings
+        // 4) vmo has no children
+        // 5) vmo is not a child
+        let mut inner = self.inner.lock();
+        if !inner.frames.is_empty() && inner.cache_policy == CachePolicy::Cached {
+            return Err(ZxError::BAD_STATE);
         }
+        if !inner.mappings.is_empty() {
+            return Err(ZxError::BAD_STATE);
+        }
+        if let Some(_) = inner.parent {
+            return Err(ZxError::BAD_STATE);
+        }
+        if inner.cache_policy == CachePolicy::Cached && policy != CachePolicy::Cached {
+            for (_, value) in inner.frames.iter() {
+                let addr = value.frame.addr();
+                let physmap_addr = addr - PHYSMAP_BASE_PHYS as usize + PHYSMAP_BASE as usize;
+                clean_invalid_cache(physmap_addr, PAGE_SIZE);
+            }
+        }
+        inner.cache_policy = policy;
+        Ok(())
     }
 
     // TODO: for vmo_create_contiguous
@@ -383,6 +383,7 @@ impl VMObjectPagedInner {
             size: self.size,
             frames: core::mem::take(&mut self.frames),
             mappings: Vec::new(),
+            cache_policy: CachePolicy::Cached,
         });
 
         // update parent's children
@@ -412,6 +413,7 @@ impl VMObjectPagedInner {
             size: len,
             frames: BTreeMap::new(),
             mappings: Vec::new(),
+            cache_policy: CachePolicy::Cached,
         });
         hidden_vmo.inner.lock().children[1] = Arc::downgrade(&child);
         child
@@ -426,6 +428,7 @@ impl VMObjectPagedInner {
         info.share_count = self.mappings.len() as u64; // FIXME share_count should be the count of unique aspace
         info.committed_bytes = (self.committed_pages() * PAGE_SIZE) as u64;
         // TODO cache_policy should be set up.
+        info.cache_policy = self.cache_policy as u32;
     }
 
     fn parent_limit(&self) -> usize {

@@ -1,5 +1,5 @@
+use kernel_hal::CachePolicy;
 use {super::*, crate::object::*, alloc::sync::Arc, bitflags::bitflags, kernel_hal::PageTable};
-use kernel_hal::{CachePolicy, CACHE_POLICY_MASK};
 
 mod paged;
 mod physical;
@@ -45,13 +45,13 @@ pub trait VMObjectTrait: Sync + Send {
 
     fn append_mapping(&self, mapping: Arc<VmMapping>);
 
+    fn remove_mapping(&self, mapping: Arc<VmMapping>);
+
     fn complete_info(&self, info: &mut ZxInfoVmo);
-    
-    fn create_clone(&self, offset: usize, len: usize) -> Arc<dyn VMObjectTrait>;
 
-    fn get_cache_policy(&self) -> u32;
+    fn get_cache_policy(&self) -> CachePolicy;
 
-    fn set_cache_policy(&self, policy: u32) -> ZxResult;
+    fn set_cache_policy(&self, policy: CachePolicy) -> ZxResult;
 }
 
 pub struct VmObject {
@@ -69,7 +69,7 @@ impl VmObject {
     /// Create a new VMO backing on physical memory allocated in pages.
     pub fn new_paged(pages: usize) -> Arc<Self> {
         Arc::new(VmObject {
-            base: KObjectBase::default(),
+            base: KObjectBase::with_signal(Signal::SIGNALED), // VMO_ZERO_CHILDREN
             parent_koid: 0,
             resizable: true,
             _counter: CountHelper::new(),
@@ -79,7 +79,7 @@ impl VmObject {
 
     pub fn new_paged_with_resizable(resizable: bool, pages: usize) -> Arc<Self> {
         Arc::new(VmObject {
-            base: KObjectBase::default(),
+            base: KObjectBase::with_signal(Signal::SIGNALED), // VMO_ZERO_CHILDREN
             parent_koid: 0,
             resizable,
             _counter: CountHelper::new(),
@@ -95,7 +95,7 @@ impl VmObject {
     #[allow(unsafe_code)]
     pub unsafe fn new_physical(paddr: PhysAddr, pages: usize) -> Arc<Self> {
         Arc::new(VmObject {
-            base: KObjectBase::default(),
+            base: KObjectBase::with_signal(Signal::SIGNALED), // VMO_ZERO_CHILDREN
             parent_koid: 0,
             resizable: true,
             _counter: CountHelper::new(),
@@ -106,7 +106,7 @@ impl VmObject {
     pub fn create_child(&self, resizable: bool, offset: usize, len: usize) -> Arc<Self> {
         // error!("create_child: offset={:#x}, len={:#x}", offset, len);
         Arc::new(VmObject {
-            base: KObjectBase::with_name(&self.base.name()),
+            base: KObjectBase::with(&self.base.name(), Signal::SIGNALED),
             parent_koid: self.base.id,
             resizable,
             _counter: CountHelper::new(),
@@ -144,6 +144,10 @@ impl VmObject {
         };
         self.inner.complete_info(&mut ret);
         ret
+    }
+
+    pub fn set_cache_policy(&self, policy: CachePolicy) -> ZxResult {
+        self.inner.set_cache_policy(policy)
     }
 }
 

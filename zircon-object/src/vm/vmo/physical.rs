@@ -13,14 +13,14 @@ pub struct VMObjectPhysical {
 
 struct VMObjectPhysicalInner {
     mapping_count: u32,
-    cache_policy: u32,
+    cache_policy: CachePolicy,
 }
 
 impl VMObjectPhysicalInner {
     pub fn new() -> VMObjectPhysicalInner {
         VMObjectPhysicalInner {
             mapping_count: 0,
-            cache_policy: CachePolicy::Uncached as u32,
+            cache_policy: CachePolicy::Uncached,
         }
     }
 }
@@ -66,32 +66,6 @@ impl VMObjectTrait for VMObjectPhysical {
         unimplemented!()
     }
 
-    fn map_to(
-        &self,
-        page_table: &mut PageTable,
-        vaddr: usize,
-        offset: usize,
-        len: usize,
-        flags: MMUFlags,
-    ) {
-        let pages = len / PAGE_SIZE;
-        let mut inner = self.inner.lock();
-        inner.mapping_count += 1;
-        page_table
-            .map_cont(vaddr, self.paddr + offset, pages, flags)
-            .expect("failed to map")
-    }
-
-    fn unmap_from(&self, page_table: &mut PageTable, vaddr: VirtAddr, _offset: usize, len: usize) {
-        let mut inner = self.inner.lock();
-        inner.mapping_count -= 1;
-        // TODO _offset unused?
-        let pages = len / PAGE_SIZE;
-        page_table
-            .unmap_cont(vaddr, pages)
-            .expect("failed to unmap")
-    }
-
     fn commit_page(&self, page_idx: usize, _flags: MMUFlags) -> ZxResult<PhysAddr> {
         Ok(self.paddr + page_idx * PAGE_SIZE)
     }
@@ -113,29 +87,35 @@ impl VMObjectTrait for VMObjectPhysical {
     fn append_mapping(&self, _mapping: Arc<VmMapping>) {
         //        unimplemented!()
         // TODO this function is only used when physical-vmo supports create_child
+        let mut inner = self.inner.lock();
+        inner.mapping_count += 1;
+    }
+
+    fn remove_mapping(&self, _mapping: Arc<VmMapping>) {
+        let mut inner = self.inner.lock();
+        inner.mapping_count -= 1;
     }
 
     fn complete_info(&self, _info: &mut ZxInfoVmo) {
         unimplemented!()
     }
 
-    fn get_cache_policy(&self) -> u32 {
+    fn get_cache_policy(&self) -> CachePolicy {
         let inner = self.inner.lock();
         inner.cache_policy
     }
 
-    fn set_cache_policy(&self, policy: u32) -> ZxResult {
-        if (policy & !CACHE_POLICY_MASK) != 0 {
-            Err(ZxError::INVALID_ARGS)
+    fn set_cache_policy(&self, policy: CachePolicy) -> ZxResult {
+        let mut inner = self.inner.lock();
+        if inner.cache_policy == policy {
+            Ok(())
         } else {
-            let mut inner = self.inner.lock();
-            if inner.cache_policy == policy {
-                Ok(())
-            } else {
-                // if (mapping_list_len_ != 0 || children_list_len_ != 0 || parent_)
-                inner.cache_policy = policy;
-                Ok(())
+            // if (mapping_list_len_ != 0 || children_list_len_ != 0 || parent_)
+            if inner.mapping_count != 0 {
+                return Err(ZxError::BAD_STATE);
             }
+            inner.cache_policy = policy;
+            Ok(())
         }
     }
 }
@@ -152,10 +132,7 @@ mod tests {
     fn read_write() {
         let vmo = unsafe { VmObject::new_physical(0x1000, 2) };
         let vmphy = vmo.inner.clone();
-        assert_eq!(
-            CachePolicy::try_from(vmphy.get_cache_policy()).unwrap(),
-            CachePolicy::Uncached
-        );
+        assert_eq!(vmphy.get_cache_policy(), CachePolicy::Uncached);
         super::super::tests::read_write(&vmo);
     }
 

@@ -147,7 +147,7 @@ impl VmAddressRegion {
         let mut flags = flags;
         // if vmo != 0
         {
-            flags |= MMUFlags::from_bits_truncate(vmo.get_cache_policy() as usize);
+            flags |= MMUFlags::from_bits_truncate(vmo.get_cache_policy() as u32 as usize);
         }
         let mapping = Arc::new(VmMapping {
             inner: Mutex::new(VmMappingInner {
@@ -155,8 +155,6 @@ impl VmAddressRegion {
                 size: len,
                 vmo_offset,
             }),
-            addr,
-            size: len,
             flags,
             vmo: vmo.clone(),
             page_table: self.page_table.clone(),
@@ -194,7 +192,12 @@ impl VmAddressRegion {
                 new_maps.push(new.clone());
                 map.vmo.append_mapping(new);
             }
-            map.size() == 0
+            if map.size() == 0 {
+                map.vmo.remove_mapping(map.clone());
+                true
+            } else {
+                false
+            }
         });
         inner.mappings.extend(new_maps);
         for vmar in inner.children.drain_filter(|vmar| vmar.within(begin, end)) {
@@ -269,6 +272,9 @@ impl VmAddressRegion {
         let inner = guard.as_mut().ok_or(ZxError::BAD_STATE)?;
         for vmar in inner.children.drain(..) {
             vmar.destroy_internal()?;
+        }
+        for map in inner.mappings.iter() {
+            map.vmo.remove_mapping(map.clone());
         }
         inner.mappings.clear();
         Ok(())

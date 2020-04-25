@@ -1,6 +1,7 @@
 use {
     super::*,
     bitflags::bitflags,
+    kernel_hal::CachePolicy,
     zircon_object::{resource::*, task::PolicyCondition, vm::*},
 };
 
@@ -39,6 +40,10 @@ impl Syscall<'_> {
         );
         let proc = self.thread.proc();
         let vmo = proc.get_object_with_rights::<VmObject>(handle_value, Rights::READ)?;
+        // in case integer addition overflows
+        if offset as usize > vmo.len() || buf_size > vmo.len() - (offset as usize) {
+            return Err(ZxError::OUT_OF_RANGE);
+        }
         // TODO: optimize
         let mut buffer = vec![0u8; buf_size];
         vmo.read(offset as usize, &mut buffer)?;
@@ -59,6 +64,9 @@ impl Syscall<'_> {
         );
         let proc = self.thread.proc();
         let vmo = proc.get_object_with_rights::<VmObject>(handle_value, Rights::WRITE)?;
+        if offset as usize > vmo.len() || buf_size > vmo.len() - (offset as usize) {
+            return Err(ZxError::OUT_OF_RANGE);
+        }
         vmo.write(offset as usize, &buf.read_array(buf_size)?)?;
         Ok(())
     }
@@ -184,8 +192,16 @@ impl Syscall<'_> {
                 }
                 vmo.decommit(offset, len)
             }
-            _ => unimplemented!(),
+            // _ => unimplemented!(),  // TODO:
+            _ => Err(ZxError::NOT_SUPPORTED),
         }
+    }
+
+    pub fn sys_vmo_cache_policy(&self, handle_value: HandleValue, policy: u32) -> ZxResult {
+        let proc = self.thread.proc();
+        let vmo = proc.get_object_with_rights::<VmObject>(handle_value, Rights::MAP)?;
+        let policy = CachePolicy::try_from(policy).or(Err(ZxError::INVALID_ARGS))?;
+        (*vmo).set_cache_policy(policy)
     }
 }
 
