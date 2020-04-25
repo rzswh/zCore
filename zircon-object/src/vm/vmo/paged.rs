@@ -5,8 +5,9 @@ use {
     alloc::sync::{Arc, Weak},
     alloc::vec,
     alloc::vec::Vec,
+    core::arch::x86_64::{__cpuid, _mm_clflush, _mm_mfence},
     core::ops::Range,
-    kernel_hal::PhysFrame,
+    kernel_hal::{PageTable, PhysFrame, PAGE_SIZE, PHYSMAP_BASE, PHYSMAP_BASE_PHYS},
     spin::Mutex,
 };
 
@@ -47,6 +48,8 @@ struct VMObjectPagedInner {
     frames: BTreeMap<usize, PageState>,
     /// All mappings to this VMO.
     mappings: Vec<Arc<VmMapping>>,
+    /// Cache Policy
+    cache_policy: u32,
 }
 
 /// Page state in VMO.
@@ -75,6 +78,7 @@ impl VMObjectPaged {
             size: pages * PAGE_SIZE,
             frames: BTreeMap::new(),
             mappings: Vec::new(),
+            cache_policy: CachePolicy::Cached as u32,
         })
     }
 
@@ -203,6 +207,49 @@ impl VMObjectTrait for VMObjectPaged {
         info.flags |= VmoInfoFlags::TYPE_PAGED;
         self.inner.lock().complete_info(info);
     }
+
+    fn get_cache_policy(&self) -> u32 {
+        self.inner.lock().cache_policy
+    }
+
+    fn set_cache_policy(&self, policy: u32) -> ZxResult {
+        if (policy & !CACHE_POLICY_MASK) != 0 {
+            Err(ZxError::INVALID_ARGS)
+        } else {
+            // conditions for allowing the cache policy to be set:
+            // 1) vmo either has no pages committed currently or is transitioning from being cached
+            // 2) vmo has no pinned pages
+            // 3) vmo has no mappings
+            // 4) vmo has no children
+            // 5) vmo is not a child
+            let mut inner = self.inner.lock();
+            if inner.frames.is_empty() && inner.cache_policy == CachePolicy::Cached as u32 {
+                return Err(ZxError::BAD_STATE);
+            }
+            if let Some(_) = inner.parent {
+                return Err(ZxError::BAD_STATE);
+            }
+            if inner.cache_policy == CachePolicy::Cached as u32
+                && policy != CachePolicy::Cached as u32
+            {
+                for p in inner.frames.iter() {
+                    if let Some(p) = p {
+                        let addr = p.addr();
+                        let physmap_addr =
+                            addr - PHYSMAP_BASE_PHYS as usize + PHYSMAP_BASE as usize;
+                        clean_invalid_cache(physmap_addr, PAGE_SIZE);
+                    }
+                }
+            }
+            inner.cache_policy = policy;
+            Ok(())
+        }
+    }
+
+    // TODO: for vmo_create_contiguous
+    // fn is_contiguous(&self) -> bool {
+    //     false
+    // }
 }
 
 impl VMObjectPagedInner {
@@ -393,6 +440,30 @@ impl Drop for VMObjectPaged {
             parent.inner.lock().remove_child(&self.self_ref);
         }
     }
+}
+
+// sse2
+#[cfg(target_arch = "x86_64")]
+#[allow(unsafe_code)]
+pub fn clean_invalid_cache(addr: usize, len: usize) {
+    let clsize = unsafe { get_cacheline_flush_size() };
+    let end = addr + len;
+    let mut start = addr & !(clsize - 1);
+    while start < end {
+        unsafe {
+            _mm_clflush(start as *const u8);
+        }
+        start = start + PAGE_SIZE;
+    }
+    unsafe {
+        _mm_mfence();
+    }
+}
+
+#[allow(unsafe_code)]
+unsafe fn get_cacheline_flush_size() -> usize {
+    let leaf = __cpuid(1).ebx;
+    (((leaf >> 8) & 0xff) << 3) as usize
 }
 
 #[cfg(test)]

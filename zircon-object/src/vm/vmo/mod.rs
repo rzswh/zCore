@@ -1,4 +1,5 @@
 use {super::*, crate::object::*, alloc::sync::Arc, bitflags::bitflags, kernel_hal::PageTable};
+use kernel_hal::{CachePolicy, CACHE_POLICY_MASK};
 
 mod paged;
 mod physical;
@@ -45,6 +46,12 @@ pub trait VMObjectTrait: Sync + Send {
     fn append_mapping(&self, mapping: Arc<VmMapping>);
 
     fn complete_info(&self, info: &mut ZxInfoVmo);
+    
+    fn create_clone(&self, offset: usize, len: usize) -> Arc<dyn VMObjectTrait>;
+
+    fn get_cache_policy(&self) -> u32;
+
+    fn set_cache_policy(&self, policy: u32) -> ZxResult;
 }
 
 pub struct VmObject {
