@@ -87,7 +87,7 @@ struct VMObjectPagedInner {
     /// Physical frames of this VMO.
     frames: BTreeMap<usize, PageState>,
     /// All mappings to this VMO.
-    mappings: Vec<Arc<VmMapping>>,
+    mappings: Vec<Weak<VmMapping>>,
     /// Cache Policy
     cache_policy: CachePolicy,
 }
@@ -278,13 +278,15 @@ impl VMObjectTrait for VMObjectPaged {
         self.inner.lock().create_child(&self.self_ref, offset, len)
     }
 
-    fn append_mapping(&self, mapping: Arc<VmMapping>) {
+    fn append_mapping(&self, mapping: Weak<VmMapping>) {
         self.inner.lock().mappings.push(mapping);
     }
 
-    fn remove_mapping(&self, mapping: Arc<VmMapping>) {
+    fn remove_mapping(&self, mapping: Weak<VmMapping>) {
         let mut inner = self.inner.lock();
-        inner.mappings.drain_filter(|x| Arc::ptr_eq(&x, &mapping));
+        inner
+            .mappings
+            .drain_filter(|x| x.strong_count() == 0 || Weak::ptr_eq(x, &mapping));
     }
 
     fn complete_info(&self, info: &mut ZxInfoVmo) {
@@ -308,6 +310,7 @@ impl VMObjectTrait for VMObjectPaged {
         if !inner.frames.is_empty() && inner.cache_policy == CachePolicy::Cached {
             return Err(ZxError::BAD_STATE);
         }
+        inner.clear_invalild_mappings();
         if !inner.mappings.is_empty() {
             return Err(ZxError::BAD_STATE);
         }
@@ -413,7 +416,8 @@ impl VMObjectPagedInner {
         start -= self.parent_offset;
         end -= self.parent_offset;
         for map in self.mappings.iter() {
-            map.range_change(pages(start), pages(end), op);
+            map.upgrade()
+                .map(|x| x.range_change(pages(start), pages(end), op));
         }
         if let VMOType::Hidden { left, right } = &self.type_ {
             for child in &[left, right] {
@@ -533,7 +537,8 @@ impl VMObjectPagedInner {
         child.inner.lock().parent = Some(hidden.clone());
         // update mappings
         for map in self.mappings.iter() {
-            map.range_change(pages(offset), pages(len), RangeChangeOp::RemoveWrite);
+            map.upgrade()
+                .map(|x| x.range_change(pages(offset), pages(len), RangeChangeOp::RemoveWrite));
         }
         child
     }
@@ -552,6 +557,10 @@ impl VMObjectPagedInner {
 
     fn parent_limit(&self) -> usize {
         self.parent_offset + self.size
+    }
+
+    fn clear_invalild_mappings(&mut self) {
+        self.mappings.drain_filter(|x| x.strong_count() == 0);
     }
 }
 

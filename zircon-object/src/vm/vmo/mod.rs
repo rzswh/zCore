@@ -1,5 +1,11 @@
 use kernel_hal::CachePolicy;
-use {super::*, crate::object::*, alloc::sync::Arc, bitflags::bitflags, kernel_hal::PageTable};
+use {
+    super::*,
+    crate::object::*,
+    alloc::sync::{Arc, Weak},
+    bitflags::bitflags,
+    kernel_hal::PageTable,
+};
 
 mod paged;
 mod physical;
@@ -50,9 +56,9 @@ pub trait VMObjectTrait: Sync + Send {
     /// Create a child VMO.
     fn create_child(&self, offset: usize, len: usize) -> Arc<dyn VMObjectTrait>;
 
-    fn append_mapping(&self, mapping: Arc<VmMapping>);
+    fn append_mapping(&self, mapping: Weak<VmMapping>);
 
-    fn remove_mapping(&self, mapping: Arc<VmMapping>);
+    fn remove_mapping(&self, mapping: Weak<VmMapping>);
 
     fn complete_info(&self, info: &mut ZxInfoVmo);
 
@@ -76,7 +82,7 @@ impl VmObject {
     /// Create a new VMO backing on physical memory allocated in pages.
     pub fn new_paged(pages: usize) -> Arc<Self> {
         Arc::new(VmObject {
-            base: KObjectBase::with_signal(Signal::SIGNALED), // VMO_ZERO_CHILDREN
+            base: KObjectBase::with_signal(Signal::VMO_ZERO_CHILDREN),
             parent_koid: 0,
             resizable: true,
             _counter: CountHelper::new(),
@@ -86,7 +92,7 @@ impl VmObject {
 
     pub fn new_paged_with_resizable(resizable: bool, pages: usize) -> Arc<Self> {
         Arc::new(VmObject {
-            base: KObjectBase::with_signal(Signal::SIGNALED), // VMO_ZERO_CHILDREN
+            base: KObjectBase::with_signal(Signal::VMO_ZERO_CHILDREN),
             parent_koid: 0,
             resizable,
             _counter: CountHelper::new(),
@@ -102,7 +108,7 @@ impl VmObject {
     #[allow(unsafe_code)]
     pub unsafe fn new_physical(paddr: PhysAddr, pages: usize) -> Arc<Self> {
         Arc::new(VmObject {
-            base: KObjectBase::with_signal(Signal::SIGNALED), // VMO_ZERO_CHILDREN
+            base: KObjectBase::with_signal(Signal::VMO_ZERO_CHILDREN),
             parent_koid: 0,
             resizable: true,
             _counter: CountHelper::new(),
@@ -121,8 +127,12 @@ impl VmObject {
     }
 
     pub fn set_len(&self, len: usize) -> ZxResult {
+        let size = roundup_pages(len);
+        if size < len {
+            return Err(ZxError::OUT_OF_RANGE);
+        }
         if self.resizable {
-            self.inner.set_len(len);
+            self.inner.set_len(size);
             Ok(())
         } else {
             Err(ZxError::UNAVAILABLE)
@@ -154,6 +164,10 @@ impl VmObject {
 
     pub fn set_cache_policy(&self, policy: CachePolicy) -> ZxResult {
         self.inner.set_cache_policy(policy)
+    }
+
+    pub fn is_resizable(&self) -> bool {
+        self.resizable
     }
 }
 

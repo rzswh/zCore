@@ -137,7 +137,11 @@ impl VmAddressRegion {
         len: usize,
         flags: MMUFlags,
     ) -> ZxResult<VirtAddr> {
-        if !page_aligned(vmo_offset) || !page_aligned(len) || vmo_offset + len > vmo.len() {
+        if !page_aligned(vmo_offset) || !page_aligned(len) || vmo_offset + len < vmo_offset {
+            return Err(ZxError::INVALID_ARGS);
+        }
+        // TODO: allow the mapping extends past the end of vmo
+        if vmo_offset > vmo.len() || len > vmo.len() - vmo_offset {
             return Err(ZxError::INVALID_ARGS);
         }
         let mut guard = self.inner.lock();
@@ -149,17 +153,14 @@ impl VmAddressRegion {
         {
             flags |= MMUFlags::from_bits_truncate(vmo.get_cache_policy() as u32 as usize);
         }
-        let mapping = Arc::new(VmMapping {
-            inner: Mutex::new(VmMappingInner {
-                addr,
-                size: len,
-                vmo_offset,
-            }),
+        let mapping = VmMapping::new(
+            addr,
+            len,
+            vmo.clone(),
+            vmo_offset,
             flags,
-            vmo: vmo.clone(),
-            page_table: self.page_table.clone(),
-        });
-        vmo.append_mapping(mapping.clone());
+            self.page_table.clone(),
+        );
         mapping.map()?;
         inner.mappings.push(mapping);
         Ok(addr)
@@ -190,10 +191,9 @@ impl VmAddressRegion {
         inner.mappings.drain_filter(|map| {
             if let Some(new) = map.cut(begin, end) {
                 new_maps.push(new.clone());
-                map.vmo.append_mapping(new);
             }
             if map.size() == 0 {
-                map.vmo.remove_mapping(map.clone());
+                map.vmo.remove_mapping(Arc::downgrade(&map));
                 true
             } else {
                 false
@@ -274,7 +274,7 @@ impl VmAddressRegion {
             vmar.destroy_internal()?;
         }
         for map in inner.mappings.iter() {
-            map.vmo.remove_mapping(map.clone());
+            map.vmo.remove_mapping(Arc::downgrade(&map));
         }
         inner.mappings.clear();
         Ok(())
@@ -486,6 +486,27 @@ impl core::fmt::Debug for VmMapping {
 }
 
 impl VmMapping {
+    fn new(
+        addr: VirtAddr,
+        size: usize,
+        vmo: Arc<VmObject>,
+        vmo_offset: usize,
+        flags: MMUFlags,
+        page_table: Arc<Mutex<PageTable>>,
+    ) -> Arc<Self> {
+        let mapping = Arc::new(VmMapping {
+            inner: Mutex::new(VmMappingInner {
+                addr,
+                size,
+                vmo_offset,
+            }),
+            flags,
+            page_table,
+            vmo: vmo.clone(),
+        });
+        vmo.append_mapping(Arc::downgrade(&mapping));
+        mapping
+    }
     fn map(self: &Arc<Self>) -> ZxResult {
         let inner = self.inner.lock();
         let mut page_table = self.page_table.lock();
@@ -551,16 +572,14 @@ impl VmMapping {
                 .unmap_cont(begin, pages(cut_len))
                 .expect("failed to unmap");
             inner.size = new_len1;
-            Some(Arc::new(VmMapping {
-                inner: Mutex::new(VmMappingInner {
-                    addr: end,
-                    size: new_len2,
-                    vmo_offset: inner.vmo_offset + (end - inner.addr),
-                }),
-                flags: self.flags,
-                vmo: self.vmo.clone(),
-                page_table: self.page_table.clone(),
-            }))
+            Some(VmMapping::new(
+                end,
+                new_len2,
+                self.vmo.clone(),
+                inner.vmo_offset + (end - inner.addr),
+                self.flags,
+                self.page_table.clone(),
+            ))
         }
     }
 

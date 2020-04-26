@@ -1,6 +1,10 @@
 #[allow(unused_imports)]
 use core::convert::TryFrom;
-use {super::*, alloc::sync::Arc, spin::Mutex};
+use {
+    super::*,
+    alloc::sync::{Arc, Weak},
+    spin::Mutex,
+};
 
 /// VMO representing a physical range of memory.
 pub struct VMObjectPhysical {
@@ -84,14 +88,14 @@ impl VMObjectTrait for VMObjectPhysical {
         unimplemented!()
     }
 
-    fn append_mapping(&self, _mapping: Arc<VmMapping>) {
+    fn append_mapping(&self, _mapping: Weak<VmMapping>) {
         //        unimplemented!()
         // TODO this function is only used when physical-vmo supports create_child
         let mut inner = self.inner.lock();
         inner.mapping_count += 1;
     }
 
-    fn remove_mapping(&self, _mapping: Arc<VmMapping>) {
+    fn remove_mapping(&self, _mapping: Weak<VmMapping>) {
         let mut inner = self.inner.lock();
         inner.mapping_count -= 1;
     }
