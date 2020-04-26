@@ -148,6 +148,34 @@ impl Syscall<'_> {
         Ok(())
     }
 
+    #[allow(unsafe_code)]
+    pub fn sys_vmo_create_physical(
+        &self,
+        rsrc: HandleValue,
+        paddr: PhysAddr,
+        size: usize,
+        mut out: UserOutPtr<HandleValue>,
+    ) -> ZxResult {
+        info!(
+            "vmo.create: handle={:#x?}, paddr={:#x?}, size={:#x}, out={:#x?}",
+            size, paddr, size, out
+        );
+        let proc = self.thread.proc();
+        proc.check_policy(PolicyCondition::NewVMO)?;
+        proc.validate_resource(rsrc, ResourceKind::MMIO)?;
+        let size = roundup_pages(size);
+        if size == 0 || !page_aligned(paddr) {
+            return Err(ZxError::INVALID_ARGS);
+        }
+        if paddr.overflowing_add(size).1 {
+            return Err(ZxError::INVALID_ARGS);
+        }
+        let vmo = unsafe { VmObject::new_physical(paddr, size / PAGE_SIZE) };
+        let handle_value = proc.add_handle(Handle::new(vmo, Rights::DEFAULT_VMO | Rights::EXECUTE));
+        out.write(handle_value)?;
+        Ok(())
+    }
+
     pub fn sys_vmo_set_size(&self, handle_value: HandleValue, size: usize) -> ZxResult {
         let proc = self.thread.proc();
         let vmo = proc.get_object_with_rights::<VmObject>(handle_value, Rights::WRITE)?;
