@@ -99,6 +99,9 @@ impl Syscall<'_> {
         if options.contains(VmOptions::CAN_MAP_RXW) {
             return Err(ZxError::INVALID_ARGS);
         }
+        if options.contains(VmOptions::REQUIRE_NON_RESIZABLE) && vmo.is_resizable() {
+            return Err(ZxError::NOT_SUPPORTED);
+        }
         // check SPECIFIC options with offset
         let is_specific = options.contains(VmOptions::SPECIFIC)
             || options.contains(VmOptions::SPECIFIC_OVERWRITE);
