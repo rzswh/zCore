@@ -1,3 +1,4 @@
+use kernel_hal::CachePolicy;
 use {
     self::{paged::*, physical::*},
     super::*,

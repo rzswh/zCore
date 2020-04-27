@@ -663,6 +663,7 @@ impl VMObjectPagedInner {
         info.share_count = self.mappings.len() as u64; // FIXME share_count should be the count of unique aspace
         info.committed_bytes = (self.committed_pages() * PAGE_SIZE) as u64;
         // TODO cache_policy should be set up.
+        info.cache_policy = self.cache_policy as u32;
     }
 
     fn release_unwanted_pages(&mut self, mut unwanted: VecDeque<usize>) {

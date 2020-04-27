@@ -313,6 +313,9 @@ impl VmAddressRegion {
         for vmar in inner.children.drain(..) {
             vmar.destroy_internal()?;
         }
+        for map in inner.mappings.iter() {
+            map.vmo.remove_mapping(Arc::downgrade(&map));
+        }
         inner.mappings.clear();
         Ok(())
     }
