@@ -2,6 +2,7 @@ use {
     super::super::*,
     alloc::{collections::VecDeque, vec::Vec},
     apic::{IoApic, LocalApic, XApic},
+    core::convert::TryFrom,
     core::fmt::{Arguments, Write},
     core::time::Duration,
     rcore_console::{Console, ConsoleOnGraphic, DrawTarget, Pixel, Rgb888, Size},
@@ -73,7 +74,10 @@ impl PageTableImpl {
     pub fn unmap(&mut self, vaddr: x86_64::VirtAddr) -> Result<(), ()> {
         let mut pt = self.get();
         let page = Page::<Size4KiB>::from_start_address(vaddr).unwrap();
-        pt.unmap(page).unwrap().1.flush();
+        if let Ok(pte) = pt.unmap(page) {
+            pte.1.flush();
+        }
+        //pt.unmap(page).unwrap().1.flush();
         trace!("unmap: {:x?}", vaddr);
         Ok(())
     }
@@ -83,11 +87,12 @@ impl PageTableImpl {
     pub fn protect(&mut self, vaddr: x86_64::VirtAddr, flags: MMUFlags) -> Result<(), ()> {
         let mut pt = self.get();
         let page = Page::<Size4KiB>::from_start_address(vaddr).unwrap();
-        let flush = pt.update_flags(page, flags.to_ptf()).unwrap();
-        if flags.contains(MMUFlags::USER) {
-            self.allow_user_access(vaddr);
+        if let Ok(flush) = pt.update_flags(page, flags.to_ptf()) {
+            if flags.contains(MMUFlags::USER) {
+                self.allow_user_access(vaddr);
+            }
+            flush.flush();
         }
-        flush.flush();
         trace!("protect: {:x?}, flags={:?}", vaddr, flags);
         Ok(())
     }
@@ -161,6 +166,23 @@ impl FlagsExt for MMUFlags {
         }
         if self.contains(MMUFlags::USER) {
             flags |= PTF::USER_ACCESSIBLE;
+        }
+        let cache_policy = (self.bits() & 3) as u32; // 最低三位用于储存缓存策略
+        match CachePolicy::try_from(cache_policy) {
+            Ok(CachePolicy::Cached) => {
+                flags.remove(PTF::WRITE_THROUGH);
+            }
+            Ok(CachePolicy::Uncached) | Ok(CachePolicy::UncachedDevice) => {
+                flags |= PTF::NO_CACHE | PTF::WRITE_THROUGH;
+            }
+            Ok(CachePolicy::WriteCombining) => {
+                flags |= PTF::HUGE_PAGE | PTF::NO_CACHE | PTF::WRITE_THROUGH;
+                // 当位于level=1时，页面更大，在1<<12位上（0x100）为1
+                // 但是bitflags里面没有这一位。由页表自行管理标记位去吧
+            }
+            Err(_) => {
+                // error
+            }
         }
         flags
     }

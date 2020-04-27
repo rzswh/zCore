@@ -122,7 +122,15 @@ pub fn run_userboot(images: &Images<impl AsRef<[u8]>>, cmdline: &str) -> Arc<Pro
     let stack_vmo = VmObject::new_paged(STACK_PAGES);
     let flags = MMUFlags::READ | MMUFlags::WRITE | MMUFlags::USER;
     let stack_bottom = vmar
-        .map(None, stack_vmo.clone(), 0, stack_vmo.len(), flags)
+        .map(
+            None,
+            stack_vmo.clone(),
+            0,
+            stack_vmo.len(),
+            flags,
+            false,
+            true,
+        )
         .unwrap();
     // WARN: align stack to 16B, then emulate a 'call' (push rip)
     let sp = stack_bottom + stack_vmo.len() - 8;

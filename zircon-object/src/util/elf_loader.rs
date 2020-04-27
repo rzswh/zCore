@@ -24,7 +24,15 @@ impl VmarExt for VmAddressRegion {
             let vmo = make_vmo(&elf, ph)?;
             let offset = ph.virtual_addr() as usize / PAGE_SIZE * PAGE_SIZE;
             let flags = ph.flags().to_mmu_flags();
-            self.map_at(offset, vmo.clone(), 0, vmo.len(), flags)?;
+            self.map_at(
+                offset,
+                vmo.clone(),
+                0,
+                vmo.len(),
+                flags,
+                false, /* overwrite */
+                true,  /* map_range*/
+            )?;
             first_vmo.get_or_insert(vmo);
         }
         Ok(first_vmo.unwrap())
@@ -39,7 +47,15 @@ impl VmarExt for VmAddressRegion {
             let flags = ph.flags().to_mmu_flags();
             let vmo_offset = pages(ph.physical_addr() as usize) * PAGE_SIZE;
             let len = pages(ph.mem_size() as usize) * PAGE_SIZE;
-            self.map_at(offset, vmo.clone(), vmo_offset, len, flags)?;
+            self.map_at(
+                offset,
+                vmo.clone(),
+                vmo_offset,
+                len,
+                flags,
+                false, /* overwrite */
+                true,  /* map_range*/
+            )?;
         }
         Ok(())
     }

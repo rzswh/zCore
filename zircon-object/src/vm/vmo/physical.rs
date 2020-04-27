@@ -1,4 +1,10 @@
-use {super::*, alloc::sync::Arc, spin::Mutex};
+#[allow(unused_imports)]
+use core::convert::TryFrom;
+use {
+    super::*,
+    alloc::sync::{Arc, Weak},
+    spin::Mutex,
+};
 
 /// VMO representing a physical range of memory.
 pub struct VMObjectPhysical {
@@ -6,6 +12,21 @@ pub struct VMObjectPhysical {
     pages: usize,
     /// Lock this when access physical memory.
     data_lock: Mutex<()>,
+    inner: Mutex<VMObjectPhysicalInner>,
+}
+
+struct VMObjectPhysicalInner {
+    mapping_count: u32,
+    cache_policy: CachePolicy,
+}
+
+impl VMObjectPhysicalInner {
+    pub fn new() -> VMObjectPhysicalInner {
+        VMObjectPhysicalInner {
+            mapping_count: 0,
+            cache_policy: CachePolicy::Uncached,
+        }
+    }
 }
 
 impl VMObjectPhysical {
@@ -21,6 +42,7 @@ impl VMObjectPhysical {
             paddr,
             pages,
             data_lock: Mutex::default(),
+            inner: Mutex::new(VMObjectPhysicalInner::new()),
         })
     }
 }
@@ -66,24 +88,87 @@ impl VMObjectTrait for VMObjectPhysical {
         unimplemented!()
     }
 
-    fn append_mapping(&self, _mapping: Arc<VmMapping>) {
+    fn append_mapping(&self, _mapping: Weak<VmMapping>) {
         //        unimplemented!()
         // TODO this function is only used when physical-vmo supports create_child
+        let mut inner = self.inner.lock();
+        inner.mapping_count += 1;
+    }
+
+    fn remove_mapping(&self, _mapping: Weak<VmMapping>) {
+        let mut inner = self.inner.lock();
+        inner.mapping_count -= 1;
     }
 
     fn complete_info(&self, _info: &mut ZxInfoVmo) {
         unimplemented!()
+    }
+
+    fn get_cache_policy(&self) -> CachePolicy {
+        let inner = self.inner.lock();
+        inner.cache_policy
+    }
+
+    fn set_cache_policy(&self, policy: CachePolicy) -> ZxResult {
+        let mut inner = self.inner.lock();
+        if inner.cache_policy == policy {
+            Ok(())
+        } else {
+            // if (mapping_list_len_ != 0 || children_list_len_ != 0 || parent_)
+            if inner.mapping_count != 0 {
+                return Err(ZxError::BAD_STATE);
+            }
+            inner.cache_policy = policy;
+            Ok(())
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     #![allow(unsafe_code)]
+    #[allow(unused_imports)]
+    use super::vmar::*;
     use super::*;
+    use kernel_hal::CachePolicy;
 
     #[test]
     fn read_write() {
         let vmo = unsafe { VmObject::new_physical(0x1000, 2) };
+        let vmphy = vmo.inner.clone();
+        assert_eq!(vmphy.get_cache_policy(), CachePolicy::Uncached);
         super::super::tests::read_write(&vmo);
     }
+
+    // #[test]
+    // fn cache_test() -> ZxResult {
+    //     let cache_policy_flags = CachePolicy::UncachedDevice.into();
+    //     let vmo = unsafe { VmObject::new_physical(0x1000, 2) };
+    //     // Test that changing policy while mapped is blocked
+    //     let vmar = VmAddressRegion::new(None, 0x0, 0x1000000, VmarFlags::ROOT_FLAGS);
+    //     let addr = vmar.map(
+    //         None,
+    //         vmo.clone(),
+    //         0,
+    //         (*vmo).len(),
+    //         MMUFlags::READ | MMUFlags::WRITE,
+    //     )?;
+    //     let vmphy = (*vmo).inner.clone();
+    //     if let Err(msg) = vmphy.set_cache_policy(cache_policy_flags) {
+    //         assert_eq!(msg, ZxError::BAD_STATE);
+    //     } else {
+    //         return Err(ZxError::CANCELED);
+    //     }
+    //     vmar.unmap(addr, (*vmo).len())?;
+    //     vmphy.set_cache_policy(cache_policy_flags)?;
+    //     let addr = vmar.map(
+    //         None,
+    //         vmo.clone(),
+    //         0,
+    //         (*vmo).len(),
+    //         MMUFlags::READ | MMUFlags::WRITE,
+    //     )?;
+    //     vmar.unmap(addr, (*vmo).len())?;
+    //     Ok(())
+    // }
 }
