@@ -9,6 +9,7 @@ use {
     spin::Mutex,
     uart_16550::SerialPort,
     x86_64::{
+        instructions::port::Port,
         registers::control::{Cr2, Cr3, Cr3Flags, Cr4, Cr4Flags},
         structures::paging::{PageTableFlags as PTF, *},
     },
@@ -373,3 +374,15 @@ static mut CONFIG: Config = Config {
     acpi_rsdp: 0,
     smbios: 0,
 };
+
+#[export_name = "hal_outpd"]
+pub fn outpd(port: u16, value: u32) {
+    unsafe {
+        Port::new(port).write(value);
+    }
+}
+
+#[export_name = "hal_inpd"]
+pub fn inpd(port: u16) -> u32 {
+    unsafe { Port::new(port).read() }
+}
