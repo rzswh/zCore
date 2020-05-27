@@ -146,7 +146,6 @@ impl PcieUpstream {
         self.inner.lock().downstream[index].clone()
     }
     pub fn set_downstream(&self, ind: usize, down: Option<Arc<dyn IPciNode + Send + Sync>>) {
-        assert!(self.inner.try_lock().is_some());
         self.inner.lock().downstream[ind] = down;
     }
 
@@ -376,10 +375,6 @@ impl PcieDevice {
                 allocation: None,
             };
             self.inner.lock().bars[i] = bar_info;
-            {
-                assert!(self.inner.try_lock().is_some());
-                self.inner.lock().bars[i] = bar_info;
-            }
             let bar_info_size = bar_info.size;
             i += 1;
             if is_64bit && bar_info_size > 0 {

@@ -70,7 +70,7 @@ impl PCIeBusDriver {
             sub_class: device.subclass_id,
             program_interface: device.prog_if,
             revision_id: device.rev_id,
-            bus_id: device.managed_bus_id as u8,
+            bus_id: device.bus_id as u8,
             dev_id: device.dev_id as u8,
             func_id: device.func_id as u8,
             _padding1: 0,
@@ -139,18 +139,24 @@ impl PCIeBusDriver {
             let end = base + size;
             if base <= u32_max {
                 let lo_size = min(u32_max + 1 - base, size);
-                self.mmio_lo.lock().add_or_subtract(base as usize, lo_size as usize, is_add);
+                self.mmio_lo
+                    .lock()
+                    .add_or_subtract(base as usize, lo_size as usize, is_add);
             }
             if end > u32_max + 1 {
                 let hi_size = min(end - (u32_max + 1), size);
-                self.mmio_hi.lock().add_or_subtract((end - hi_size) as usize, end as usize, is_add);
+                self.mmio_hi
+                    .lock()
+                    .add_or_subtract((end - hi_size) as usize, end as usize, is_add);
             }
         } else if aspace == PciAddrSpace::PIO {
             let end = base + size - 1;
             if ((base | end) & !PCIE_PIO_ADDR_SPACE_MASK) != 0 {
                 return Err(ZxError::INVALID_ARGS);
             }
-            self.pio_region.lock().add_or_subtract(base as usize, size as usize, is_add);
+            self.pio_region
+                .lock()
+                .add_or_subtract(base as usize, size as usize, is_add);
         }
         Ok(())
     }
