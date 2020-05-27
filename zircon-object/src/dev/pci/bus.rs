@@ -1,6 +1,7 @@
 use super::super::*;
 use super::config::*;
 use super::*;
+use crate::object::*;
 use crate::vm::{kernel_allocate_physical, CachePolicy, MMUFlags, PhysAddr, VirtAddr};
 use alloc::{collections::BTreeMap, sync::Arc, vec::Vec};
 use core::cmp::min;
@@ -21,7 +22,7 @@ pub struct PCIeBusDriver {
     legacy_irq_list: Mutex<Vec<Arc<SharedLegacyIrqHandler>>>,
 }
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Debug)]
 enum PCIeBusDriverState {
     NotStarted,
     StartingScanning,
@@ -55,6 +56,27 @@ impl PCIeBusDriver {
     }
     pub fn start_bus_driver() -> ZxResult {
         _INSTANCE.lock().start_bus_driver_inner()
+    }
+    pub fn get_nth_device(n: usize) -> ZxResult<(PcieDeviceInfo, PcieDeviceKObject)> {
+        let device_node = _INSTANCE
+            .lock()
+            .get_nth_device_inner(n)
+            .ok_or(ZxError::OUT_OF_RANGE)?;
+        let device = device_node.device().unwrap();
+        let info = PcieDeviceInfo {
+            vendor_id: device.vendor_id,
+            device_id: device.device_id,
+            base_class: device.class_id,
+            sub_class: device.subclass_id,
+            program_interface: device.prog_if,
+            revision_id: device.rev_id,
+            bus_id: device.managed_bus_id as u8,
+            dev_id: device.dev_id as u8,
+            func_id: device.func_id as u8,
+            _padding1: 0,
+        };
+        let object = PcieDeviceKObject::new(device_node.clone());
+        Ok((info, object))
     }
 }
 
@@ -167,46 +189,46 @@ impl PCIeBusDriver {
         )?;
         Ok(())
     }
-    fn foreach_root<T, C>(&self, callback: T, context: C)
+    fn foreach_root<T, C>(&self, callback: T, context: C) -> C
     where
-        T: Fn(&PciRoot, &mut C) -> bool,
+        T: Fn(Arc<PciRoot>, &mut C) -> bool,
     {
         let mut bus_top_guard = self.bus_topology.lock();
         let mut context = context;
         for (_key, root) in self.roots.iter() {
             drop(bus_top_guard);
-            if !callback(root, &mut context) {
-                return;
+            if !callback(root.clone(), &mut context) {
+                return context;
             }
             bus_top_guard = self.bus_topology.lock();
         }
         drop(bus_top_guard);
+        context
     }
 
-
-    #[allow(dead_code)]
-    fn foreach_device<T, C>(&self, callback: &T, context: C)
+    fn foreach_device<T, C>(&self, callback: &T, context: C) -> C
     where
-        T: Fn(&(dyn IPciNode + Send + Sync), &mut C, usize) -> bool,
+        T: Fn(Arc<dyn IPciNode + Send + Sync>, &mut C, usize) -> bool,
     {
         self.foreach_root(
             |root, ctx| {
-                self.foreach_downstream(root, 0 /*level*/, callback, &mut (ctx.0));
+                self.foreach_downstream(root.clone(), 0 /*level*/, callback, &mut (ctx.0));
                 true
             },
             (context, &self),
         )
+        .0
     }
 
     #[allow(dead_code)]
     fn foreach_downstream<T, C>(
         &self,
-        upstream: &(dyn IPciNode + Send + Sync),
+        upstream: Arc<dyn IPciNode + Send + Sync>,
         level: usize,
         callback: &T,
         context: &mut C,
     ) where
-        T: Fn(&(dyn IPciNode + Send + Sync), &mut C, usize) -> bool,
+        T: Fn(Arc<dyn IPciNode + Send + Sync>, &mut C, usize) -> bool,
     {
         if level > 256 || upstream.as_upstream().is_none() {
             return;
@@ -215,11 +237,11 @@ impl PCIeBusDriver {
         for i in 0..PCI_MAX_FUNCTIONS_PER_BUS {
             let device = upstream.get_downstream(i);
             if let Some(dev) = device {
-                if !callback(dev.as_ref(), context, level) {
+                if !callback(dev.clone(), context, level) {
                     continue;
                 }
                 if let PciNodeType::Bridge = dev.node_type() {
-                    self.foreach_downstream(dev.as_ref(), level + 1, callback, context);
+                    self.foreach_downstream(dev, level + 1, callback, context);
                 }
             }
         }
@@ -229,14 +251,18 @@ impl PCIeBusDriver {
         expected: PCIeBusDriverState,
         target: PCIeBusDriverState,
     ) -> ZxResult {
-        if self.state == expected {
+        trace!("transfer state from {:#x?} to {:#x?}", expected, target);
+        if self.state != expected {
             return Err(ZxError::BAD_STATE);
         }
         self.state = target;
         Ok(())
     }
     fn is_started(&self, _allow_quirks_phase: bool) -> bool {
-        false
+        match self.state {
+            PCIeBusDriverState::NotStarted => false,
+            _ => true,
+        }
     }
 
     pub fn get_config(
@@ -301,6 +327,22 @@ impl PCIeBusDriver {
                 x
             })
             .ok_or(ZxError::NO_RESOURCES)
+    }
+
+    pub fn get_nth_device_inner(&self, n: usize) -> Option<Arc<dyn IPciNode + Send + Sync>> {
+        self.foreach_device(
+            &|device, context: &mut (usize, Option<Arc<_>>), _level| {
+                if context.0 == 0 {
+                    context.1 = Some(device);
+                    false
+                } else {
+                    context.0 -= 1;
+                    true
+                }
+            },
+            (n, None),
+        )
+        .1
     }
 }
 
@@ -413,5 +455,36 @@ impl PCIeAddressProvider for PioPcieAddressProvider {
     ) -> ZxResult<(PhysAddr, VirtAddr)> {
         let virt = pci_bdf_raw_addr(bus_id, device_id, function_id, 0);
         Ok((0, virt as VirtAddr))
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Debug)]
+pub struct PcieDeviceInfo {
+    pub vendor_id: u16,
+    pub device_id: u16,
+    pub base_class: u8,
+    pub sub_class: u8,
+    pub program_interface: u8,
+    pub revision_id: u8,
+    pub bus_id: u8,
+    pub dev_id: u8,
+    pub func_id: u8,
+    _padding1: u8,
+}
+
+pub struct PcieDeviceKObject {
+    base: KObjectBase,
+    pub device: Arc<dyn IPciNode + Send + Sync>,
+}
+
+impl_kobject!(PcieDeviceKObject);
+
+impl PcieDeviceKObject {
+    pub fn new(device: Arc<dyn IPciNode + Send + Sync>) -> PcieDeviceKObject {
+        PcieDeviceKObject {
+            base: KObjectBase::new(),
+            device,
+        }
     }
 }
