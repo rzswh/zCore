@@ -20,7 +20,7 @@ impl PciCapacityStd {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone, Copy)]
 pub struct PciMsiBlock {
     pub target_addr: u64,
     pub allocated: bool,
@@ -29,39 +29,40 @@ pub struct PciMsiBlock {
     pub target_data: u32,
 }
 
+#[derive(Clone, Copy)]
 pub struct PciCapacityMsi {
     pub msi_size: u16,
     pub has_pvm: bool,
     pub is_64bit: bool,
     pub max_irq: u32,
     pub irq_block: PciMsiBlock,
+    pub addr_upper_offset: usize, // reg32
+    pub data_offset: usize, // reg16
+    pub mask_bits_offset: usize, // reg32
+    pub pending_bits_offset: usize, // reg32
 }
 
 impl PciCapacityMsi {
-    pub fn create(cfg: &PciConfig, base: u16, id: u8) -> PciCapacityMsi {
+    pub fn create(cfg: &PciConfig, base: usize, id: u8) -> PciCapacityMsi {
         assert_eq!(id, 0x5); // PCIE_CAP_ID_MSI
-        let ctrl = cfg.read16_offset(base as usize + 0x2);
+        let ctrl = cfg.read16_offset(base + 0x2);
         let has_pvm = (ctrl & 0x100) != 0;
         let is_64bit = (ctrl & 0x80) != 0;
         cfg.write16_offset(base as usize + 0x2, ctrl & !0x71);
         PciCapacityMsi {
             msi_size: if has_pvm {
-                if is_64bit {
-                    20
-                } else {
-                    16
-                }
+                if is_64bit { 20 } else { 16 }
             } else {
-                if is_64bit {
-                    14
-                } else {
-                    10
-                }
+                if is_64bit { 14 } else { 10 }
             },
             has_pvm,
             is_64bit,
             max_irq: 0x1 << ((ctrl >> 1) & 0x7),
             irq_block: PciMsiBlock::default(),
+            addr_upper_offset: if is_64bit { base + 0x8 } else { 0 /*shouldn't use it*/},
+            data_offset: base + if is_64bit { 0xC } else { 0x8 },
+            mask_bits_offset: base + if is_64bit { 0x10 } else { 0xC },
+            pending_bits_offset: base + if is_64bit { 0x14 } else { 0x10 },
         }
     }
 }
