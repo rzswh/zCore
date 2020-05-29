@@ -67,6 +67,7 @@ impl PciCapacityMsi {
     }
 }
 
+#[derive(Clone, Copy)]
 pub struct PciCapPcie {
     pub version: u8,
     pub dev_type: PcieDeviceType,

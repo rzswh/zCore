@@ -306,6 +306,8 @@ impl Syscall<'_> {
             Sys::PCI_MAP_INTERRUPT => self.sys_pci_map_interrupt(a0 as _, a1 as _, a2.into()),
             Sys::PCI_GET_BAR => self.sys_pci_get_bar(a0 as _, a1 as _, a2.into(), a3.into()),
             Sys::PCI_ENABLE_BUS_MASTER => self.sys_pci_enable_bus_master(a0 as _, a1 != 0),
+            Sys::PCI_CONFIG_READ => self.sys_pci_config_read(a0 as _, a1 as _, a2 as _, a3.into()),
+            Sys::PCI_CONFIG_WRITE => self.sys_pci_config_write(a0 as _, a1 as _, a2 as _, a3 as _),
             Sys::INTERRUPT_CREATE => {
                 self.sys_interrupt_create(a0 as _, a1 as _, a2 as _, a3.into())
             }

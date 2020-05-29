@@ -218,6 +218,23 @@ impl Syscall<'_> {
         let devobj = proc.get_object_with_rights::<PcieDeviceKObject>(handle, Rights::WRITE)?;
         devobj.device.device().unwrap().enable_master(enable)
     }
+
+    pub fn sys_pci_config_read(&self, handle: HandleValue, offset: usize, width: usize, mut out_val: UserOutPtr<u32>) -> ZxResult {
+        info!("pci.config_read: handle={:#x}, offset={:x}, width={:x}", handle, offset, width);
+        let proc = self.thread.proc();
+        let devobj = proc.get_object_with_rights::<PcieDeviceKObject>(handle, Rights::READ | Rights::WRITE)?;
+        let val = devobj.device.device().unwrap().config_read(offset, width)?;
+        out_val.write(val)?;
+        Ok(())
+    }
+
+    pub fn sys_pci_config_write(&self, handle: HandleValue, offset: usize, width: usize, val: u32) -> ZxResult {
+        info!("pci.config_write: handle={:#x}, offset={:x}, width={:x}", handle, offset, width);
+        let proc = self.thread.proc();
+        let devobj = proc.get_object_with_rights::<PcieDeviceKObject>(handle, Rights::READ | Rights::WRITE)?;
+        devobj.device.device().unwrap().config_write(offset, width, val)?;
+        Ok(())
+    }
 }
 
 #[repr(C)]
