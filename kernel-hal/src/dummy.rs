@@ -349,6 +349,12 @@ pub fn irq_handle(irq: u8) {
     InterruptManager::handle(irq)
 }
 
+#[linkage = "weak"]
+#[export_name = "hal_keyboard_add"]
+pub fn keyboard_add(_: u8) {
+    unimplemented!();
+}
+
 /// Get platform specific information.
 #[linkage = "weak"]
 #[export_name = "hal_vdso_constants"]

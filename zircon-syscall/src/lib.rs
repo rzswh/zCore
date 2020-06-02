@@ -234,6 +234,7 @@ impl Syscall<'_> {
             Sys::DEBUG_WRITE => self.sys_debug_write(a0.into(), a1 as _),
             Sys::DEBUGLOG_CREATE => self.sys_debuglog_create(a0 as _, a1 as _, a2.into()),
             Sys::DEBUGLOG_WRITE => self.sys_debuglog_write(a0 as _, a1 as _, a2.into(), a3 as _),
+            Sys::SYSCALL_TEST_1 => self.sys_test_1(a0 as _),
             Sys::RESOURCE_CREATE => self.sys_resource_create(
                 a0 as _,
                 a1 as _,

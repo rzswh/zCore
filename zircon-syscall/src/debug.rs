@@ -34,4 +34,10 @@ impl Syscall<'_> {
         actual.write(1)?;
         Ok(())
     }
+
+    pub fn sys_test_1(&self, val: i32) -> ZxResult {
+        info!("test.1: value={}", val);
+        kernel_hal::keyboard_add(val as u8);
+        Ok(())
+    }
 }

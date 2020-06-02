@@ -21,9 +21,6 @@ pub fn init() {
     }
     init_irq_table();
     irq_add_handle(Timer + IRQ0, Box::new(timer));
-    // irq_enable_raw(Keyboard, Keyboard + IRQ0);
-    // irq_add_handle(COM1 + IRQ0, Box::new(com1));
-    // irq_enable_raw(COM1, COM1 + IRQ0);
 }
 
 fn init_irq_table() {
@@ -89,10 +86,6 @@ pub fn irq_handle(irq: u8) {
 #[export_name = "hal_ioapic_set_handle"]
 pub fn set_handle(global_irq: u32, handle: InterruptHandle) -> Option<u8> {
     info!("set_handle irq={:#x?}", global_irq);
-    // if global_irq == 1 {
-    //     irq_add_handle(global_irq as u8 + IRQ0, handle);
-    //     return Some(global_irq as u8 + IRQ0);
-    // }
     let ioapic_info = if let Some(x) = get_ioapic(global_irq) {
         x
     } else {
@@ -101,15 +94,7 @@ pub fn set_handle(global_irq: u32, handle: InterruptHandle) -> Option<u8> {
     let mut ioapic = ioapic_controller(&ioapic_info);
     let offset = (global_irq - ioapic_info.global_system_interrupt_base) as u8;
     let irq = ioapic.irq_vector(offset);
-    let new_handle = if global_irq == 0x1 {
-        Box::new(move || {
-            handle();
-            keyboard();
-        })
-    } else {
-        handle
-    };
-    irq_add_handle(irq, new_handle).map(|x| {
+    irq_add_handle(irq, handle).map(|x| {
         warn!("mapping from {:#x?} to {:#x?}", global_irq, x);
         ioapic.set_irq_vector(offset, x);
         x
@@ -215,10 +200,6 @@ pub fn overwrite_handler(msi_id: u32, handle: Box<dyn Fn() + Send + Sync>) -> bo
 #[export_name = "hal_irq_enable"]
 pub fn irq_enable(irq: u32) {
     info!("irq_enable irq={:#x?}", irq);
-    // if irq == 1 {
-    //     irq_enable_raw(irq as u8, irq as u8 + IRQ0);
-    //     return;
-    // }
     if let Some(x) = get_ioapic(irq) {
         let mut ioapic = ioapic_controller(&x);
         ioapic.enable((irq - x.global_system_interrupt_base) as u8, 0);
@@ -314,9 +295,10 @@ fn com1() {
     super::serial_put(c);
 }
 
-fn keyboard() {
+#[export_name = "hal_keyboard_add"]
+pub fn keyboard_add(scode: u8) {
     use pc_keyboard::{DecodedKey, KeyCode};
-    if let Some(key) = super::keyboard::receive() {
+    if let Some(key) = super::keyboard::receive(scode) {
         match key {
             DecodedKey::Unicode(c) => super::serial_put(c as u8),
             DecodedKey::RawKey(code) => {
